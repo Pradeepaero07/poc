@@ -1,0 +1,243 @@
+node('docker123'){
+    def commonutilities;
+    try {
+    	def node_os = isUnix() ? 'LINUX' : 'WIN'
+        if (node_os == 'WIN')
+            println 'Running on WINDOWS node...!!!'
+        else
+            println 'Running on LINUX node...!!!'
+	    def gitpipelinerepo = "github.aig.net/commercial-it-devops/pipeline-utilities.git";
+      	clonerepo(node_os, gitpipelinerepo, "master");
+        commonutilities = load "./pipeline-utilities/common.groovy"
+        def stageArray = commonutilities.prepareStages("Checkout", "Checkout properties", "Build Automation", "Unit Testing", "Code Analysis", "Security Testing", "Build Management", "Build Image", "Upload to artifactory", "Upload to ECR", "Deployment");
+        executeBuild(stageArray, node_os);
+    } catch (Exception e) {
+        throw e;
+    } finally {
+        deleteDir();
+        step([$class: 'AuditPipelinePublisher', enabled: true]);
+    }
+}
+
+def executeBuild(stageArray, node_os) {
+    def commonutilities = load "./pipeline-utilities/common.groovy";
+    def containerutil = load "./pipeline-utilities/container.groovy";
+	//config details
+    //GIT
+    def jobName = env.JOB_NAME;
+    def gitRepo = "git@github.aig.net:commercial-it-liability/uw-rrd-dmvolv-1799.git";
+	def configRepo = "devops-uw-rrd-dmvolv-devcicd-1799";
+    def branchName = "${repoBranchName}";
+    def gitCredId = env.SSH_DEVOPSPIPELINE_CRED_ID_GIT
+
+    //Sonar
+    def sonarQubeURL = env.CODE_QUALITY_SONAR_URL;
+    def sonarLogin = env.SONAR_LOGIN_ID;
+    def sonarProjectName;
+    def sonarProjectKey;
+    def sonarSource;
+    def sonar_url = env.CODE_QUALITY_SONAR_URL + "/dashboard/index/"
+
+    def buildVersion;
+    def artifactory_path;
+    def jdk8Home;
+
+	//Job
+    def workspace = pwd()
+    if (node_os == 'WIN') {
+        jdk8Home = tool "win-jdk-8"
+    } else {
+        jdk8Home = "/jenkins_home/java/jdk1.8.0_161";//tool 'jdk1.8'
+    }
+
+    def skipSonarBuildBreaker;
+    def artifactLocationUIURI;
+    def artifactName;
+    def branchPipelineProps = '';
+	def applicationUrl;
+    def server = Artifactory.server 'artifactory_devops_prod'
+    def photonDashboardUrl;
+    def urlArray = [:];
+	
+	try {
+        stage("Checkout") {
+            try {
+                git credentialsId: gitCredId, url: gitRepo, branch: branchName
+                stageArray.put('Checkout', 'Success');
+            } catch (Exception e) {
+                stageArray.put('Checkout', 'Failure');
+                throw e;
+            }
+        }
+
+        stage("Checkout properties") {
+            try {
+                println "Start checkout properties"  
+				clonerepo(node_os, "github.aig.net/commercial-it-config/${configRepo}", "master");
+				def configFolder = "${configRepo}/dev/service/pipeline.properties";
+				branchPipelineProps = readProperties file: configFolder;
+				println "branchPipelineProps listed below";
+				println branchPipelineProps;
+				env.MAJOR_VER = branchPipelineProps.MAJOR_VER;
+				env.MINOR_VER = branchPipelineProps.MINOR_VER;
+				env.PATCH = branchPipelineProps.PATCH;
+				env.emailTo = branchPipelineProps.EMAILTO;
+				env.DEV_DEPLOYMENT_SUBJECT = branchPipelineProps.DEV_DEPLOYMENT_SUBJECT;
+				env.release_Start_date = branchPipelineProps.RELEASE_START_DATE;
+				env.sprint_Start_date = branchPipelineProps.SPRINT_START_DATE;
+				artifactNamePrefix = branchPipelineProps.ARTIFACT_NAME_PREFIX
+				artifactoryPublishRepo = branchPipelineProps.ARTIFACTORY_PUBLISH_REPO ;
+				downloadRepo = branchPipelineProps.ARTIFACTORY_VIRTUAL_REPO
+				buildVersion = env.MAJOR_VER + "." + env.MINOR_VER + "." + env.PATCH + "." + env.BUILD_NUMBER;
+				sonar_url = sonar_url + branchPipelineProps.SONAR_PROJECT_KEY + ":" + "${repoBranchName}";
+				sonarProjectName = branchPipelineProps.SONAR_PROJECT_NAME;
+				sonarProjectKey = branchPipelineProps.SONAR_PROJECT_KEY;
+				sonarSource = branchPipelineProps.SONAR_SOURCE;
+				skipSonarBuildBreaker = branchPipelineProps.SKIP_BUILD_BREAKER;
+				artifactLocationUIURI = branchPipelineProps.ARTIFACT_LOCATION_UI_URI;
+				artifactName = branchPipelineProps.ARTIFACT_NAME;
+				applicationUrl = branchPipelineProps.APPLICATION_URL;
+				print  "Artifactory path setting"
+				artifactory_path = "${env.ARTIFACTORY_URL}/$artifactoryPublishRepo/$artifactLocationUIURI/$artifactNamePrefix"
+				artifactory_url = "${env.ARTIFACTORY_URL}/"
+		    	artifactoryPublishRepo ="$artifactoryPublishRepo/$artifactLocationUIURI/";
+				photonDashboardUrl = branchPipelineProps.PHOTON_DASHBOARD_URL;
+				urlArray.put("Photon Dashboard",photonDashboardUrl );
+				urlArray.put("SonarQube",sonar_url );
+				stageArray.put('Checkout properties', 'Success');
+            } catch (Exception e) {
+                stageArray.put('Checkout properties', 'Failure');
+                throw e;
+            }
+        }
+
+	stage("Build Automation") {
+		try {
+			withEnv(["JAVA_HOME=${jdk8Home}", "BUILD_VERSION=${buildVersion}"]) {
+				 if (node_os == 'WIN') {
+					bat "gradlew.bat clean assemble";
+				} else {
+					sh "chmod +x gradlew";
+                    sh "./gradlew clean assemble";
+				}
+			}
+			stageArray.put('Build Automation', 'Success');
+		} catch (Exception e) {
+			stageArray.put('Build Automation', 'Failure');
+			throw e;
+		}
+	}
+	
+	stage("Unit Testing") {
+    	try {
+			withEnv(["JAVA_HOME=${jdk8Home}", "BUILD_VERSION=${buildVersion}"]) {
+				 if (node_os == 'WIN') {
+					bat "gradlew.bat build";
+				} else {
+                    sh "./gradlew build";
+				}
+			}
+			stageArray.put('Unit Testing', 'Success');
+		} catch (Exception e) {
+			stageArray.put('Unit Testing', 'Failure');
+			if (currentBuild.result == 'UNSTABLE') {
+				currentBuild.result = 'FAILURE';
+			}
+			throw e;
+		}finally{
+			//step([$class: 'JUnitResultArchiver', testResults: '']);//target/test-results/ * . xml
+		}      
+    }
+
+
+	stage("Code Analysis") {
+		try {
+			withEnv(["JAVA_HOME=${jdk8Home}", "BUILD_VERSION=${buildVersion}","GRADLE_OPTS=-Dsonar.host.url=${sonarQubeURL} -Dsonar.login=${sonarLogin} -DallowSonarAnalysis=true -Dsonar.branch=${branchName} -Dsonar.buildbreaker.skip=${skipSonarBuildBreaker}"]) {
+				if (node_os == 'WIN') {
+					bat "gradlew.bat sonarqube";
+				} else {
+                    sh "./gradlew sonarqube";
+				}
+			}
+			stageArray.put('Code Analysis', 'Success');
+		} catch (Exception e) {
+			stageArray.put('Code Analysis', 'Failure');
+			throw e;
+		}
+	}
+		
+		
+	stage("Security Testing") {
+		try {
+			stageArray.put('Security Testing', 'Success');
+		} catch (Exception e) {
+			stageArray.put('Security Testing', 'Failure');
+			throw e;
+		}
+	}	 
+
+	stage("Build Management") {
+		try{
+			withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'devopspipeline_artifactory_credential_id', usernameVariable: 'artifactoryUsername', passwordVariable: 'artifactoryPassword']]) {
+            	withEnv(["JAVA_HOME=${jdk8Home}", "BUILD_VERSION=${buildVersion}", "GRADLE_OPTS=-Dartifactory.publish.repo.user=${env.artifactoryUsername} -Dartifactory.publish.repo=${artifactoryPublishRepo} -Dartifactory.publish.repo.pwd=${env.artifactoryPassword}"]) {
+					if (node_os == 'WIN') {
+						bat "gradlew.bat artifactoryPublish";
+					} else {
+						sh "./gradlew artifactoryPublish";
+					}
+				}
+			}
+			
+			urlArray.put("Artifacts", artifactory_path);
+			stageArray.put('Build Management', 'Success');
+		}catch(Exception e){
+			stageArray.put('Build Management', 'Failure');
+			throw e;
+		}
+  	}
+		
+		
+     stage("Deployment") {
+            try{
+				def fileName = artifactNamePrefix + '-'+buildVersion + '.war';
+				def packagePath = env.ARTIFACTORY_URL + "/" + downloadRepo + "/" + artifactLocationUIURI+"/"+artifactNamePrefix + "/" + buildVersion + "/" + fileName;
+					  println packagePath;
+            def deploymentStatus = build job: 'commercial-it-liability/UW-RRD-DMVOLV-1799/dev-ci-cd/dev1/services/xldjobs/uw-rrd-dmvolv-deploy-dev',
+				parameters: [[$class: 'StringParameterValue', name: 'packagePath', value: packagePath], 
+							[$class: 'StringParameterValue', name: 'versionNumber', value: buildVersion]]
+                    stageArray.put('Deployment', 'Success');
+          	//commonutilities.publishArtifactsToBuildScreen(manager,applicationUrl,artifactory_url,sonar_url,photonDashboardUrl);
+            }catch(Exception e){
+                stageArray.put('Deployment', 'Failure');
+                throw e;
+            }
+	}
+
+	hygieiaDeployPublishStep applicationName: 'uw-rrd-dmvolv-1799', artifactDirectory: '.', artifactGroup: 'com.aig.commercial', artifactName: "target/archives/OLVWeb-${buildVersion}.war", artifactVersion: buildVersion, buildStatus: 'Success', environmentName: 'Dev';
+	 //commonutilities.publishArtifactsToBuildScreen(manager, urlArray);
+	 commonutilities.sendEmailNotification('Success', env.DEV_DEPLOYMENT_SUBJECT, buildVersion,'', true, env.emailTo, urlArray, stageArray);
+
+    } catch (Throwable e) {
+    	commonutilities.sendEmailNotification('Failure', env.DEV_DEPLOYMENT_SUBJECT, buildVersion,'', true, env.emailTo,urlArray, stageArray);
+        throw e;
+    }
+}
+
+
+def clonerepo(nodeOs, gitRepo, branchName){
+	try{
+		withCredentials([string(credentialsId: 'comm_git_clone_token', variable: 'comm_git_clone_token')]){
+			if(nodeOs == 'WIN') {
+				bat "git clone -b ${branchName} https://${comm_git_clone_token}@${gitRepo}";
+				println "Cloned the repo";
+			}else{
+				//scl enable rh-git29 --
+				sh " git clone -b ${branchName} https://${comm_git_clone_token}@${gitRepo}";
+			}
+		}
+		println "Cloned repo - ${gitRepo}, branch - ${branchName}";
+	}catch(Exception e){
+		println "Failed to clone repo - ${gitRepo}";
+		throw e;
+	}
+}
