@@ -6,7 +6,7 @@ node('docker123'){
             println 'Running on WINDOWS node...!!!'
         else
             println 'Running on LINUX node...!!!'
-	    def gitpipelinerepo = "github.aig.net/commercial-it-devops/pipeline-utilities.git";
+	    def gitpipelinerepo = "${params.gitpipelinerepo}"//"github.aig.net/commercial-it-devops/pipeline-utilities.git";//Will be added as parameter
       	clonerepo(node_os, gitpipelinerepo, "master");
         commonutilities = load "./pipeline-utilities/common.groovy"
         def stageArray = commonutilities.prepareStages("Checkout", "Checkout properties", "Build Automation", "Unit Testing", "Code Analysis", "Security Testing", "Build Management", "Build Image", "Upload to artifactory", "Upload to ECR", "Deployment");
@@ -25,8 +25,8 @@ def executeBuild(stageArray, node_os) {
 	//config details
     //GIT
     def jobName = env.JOB_NAME;
-    def gitRepo = "git@github.aig.net:commercial-it-liability/uw-rrd-dmvolv-1799.git";
-	def configRepo = "devops-uw-rrd-dmvolv-devcicd-1799";
+    def gitRepo = "${params.buildGitRepo}"//"git@github.aig.net:commercial-it-liability/uw-rrd-dmvolv-1799.git";//Will be added as parameter
+	def configRepo = "${params.buildConfigRepo}"//"devops-uw-rrd-dmvolv-devcicd-1799";//Will be added as parameter
     def branchName = "${repoBranchName}";
     def gitCredId = env.SSH_DEVOPSPIPELINE_CRED_ID_GIT
 
@@ -202,7 +202,7 @@ def executeBuild(stageArray, node_os) {
 				def fileName = artifactNamePrefix + '-'+buildVersion + '.war';
 				def packagePath = env.ARTIFACTORY_URL + "/" + downloadRepo + "/" + artifactLocationUIURI+"/"+artifactNamePrefix + "/" + buildVersion + "/" + fileName;
 					  println packagePath;
-            def deploymentStatus = build job: 'commercial-it-liability/UW-RRD-DMVOLV-1799/dev-ci-cd/dev1/services/xldjobs/uw-rrd-dmvolv-deploy-dev',
+            def deploymentStatus = build job:'commercial-it-liability/'+"${params.app_name}"+'-'+"${params.gear_id}"+'/dev-ci-cd/dev1/services/xldjobs/'+"${params.app_name_lower_case}"+'-dev',//Will be added as parameter
 				parameters: [[$class: 'StringParameterValue', name: 'packagePath', value: packagePath], 
 							[$class: 'StringParameterValue', name: 'versionNumber', value: buildVersion]]
                     stageArray.put('Deployment', 'Success');
@@ -213,7 +213,7 @@ def executeBuild(stageArray, node_os) {
             }
 	}
 
-	hygieiaDeployPublishStep applicationName: 'uw-rrd-dmvolv-1799', artifactDirectory: '.', artifactGroup: 'com.aig.commercial', artifactName: "target/archives/OLVWeb-${buildVersion}.war", artifactVersion: buildVersion, buildStatus: 'Success', environmentName: 'Dev';
+	hygieiaDeployPublishStep applicationName: "${params.app_name_lower_case}-${params.gear_id}", artifactDirectory: '.', artifactGroup: 'com.aig.commercial', artifactName: "target/archives/OLVWeb-${buildVersion}.war", artifactVersion: buildVersion, buildStatus: 'Success', environmentName: 'Dev';//Will be added as parameter
 	 //commonutilities.publishArtifactsToBuildScreen(manager, urlArray);
 	 commonutilities.sendEmailNotification('Success', env.DEV_DEPLOYMENT_SUBJECT, buildVersion,'', true, env.emailTo, urlArray, stageArray);
 
